@@ -58,9 +58,9 @@ export default function Landing() {
               variant="outline"
               size="sm"
               className="h-7 text-[11px] border-white/[0.08] text-[#ccc] hover:bg-white/[0.04]"
-              onClick={() => navigate("/auth")}
+              onClick={() => navigate("/player")}
             >
-              Sign In
+              Launch Player
             </Button>
           </nav>
         </div>
@@ -88,7 +88,7 @@ export default function Landing() {
             <div className="flex items-center justify-center gap-3">
               <Button
                 className="h-9 px-5 text-xs bg-white text-[#0a0a0a] hover:bg-white/90 rounded-full"
-                onClick={() => navigate("/auth")}
+                onClick={() => navigate("/player")}
               >
                 Get Started
                 <ArrowRight className="ml-2 h-3.5 w-3.5" />
@@ -97,7 +97,7 @@ export default function Landing() {
                 variant="outline"
                 size="sm"
                 className="h-9 px-5 text-xs border-white/[0.08] text-[#888] hover:text-[#ccc] rounded-full"
-                onClick={() => navigate("/auth")}
+                onClick={() => navigate("/player")}
               >
                 <Eye className="mr-1.5 h-3.5 w-3.5" />
                 Try demo

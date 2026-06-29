@@ -2,8 +2,6 @@ import '@vly-ai/integrations';
 import { Toaster } from "@/components/ui/sonner";
 import { VlyToolbar } from "../vly-toolbar-readonly.tsx";
 import { InstrumentationProvider } from "@/instrumentation.tsx";
-import { ConvexAuthProvider } from "@convex-dev/auth/react";
-import { ConvexReactClient } from "convex/react";
 import { StrictMode, useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter, Route, Routes, useLocation } from "react-router";
@@ -12,15 +10,8 @@ import "./types/global.d.ts";
 
 // Direct imports — no code splitting to avoid chunk loading issues on Railway
 import Landing from "./pages/Landing.tsx";
-import AuthPage from "./pages/Auth.tsx";
 import Player from "./pages/Player.tsx";
 import NotFound from "./pages/NotFound.tsx";
-
-// Convex is optional — the Landing page works without it
-const convexUrl = import.meta.env.VITE_CONVEX_URL;
-const convex = convexUrl ? new ConvexReactClient(convexUrl) : null;
-
-
 
 function RouteSyncer() {
   const location = useLocation();
@@ -45,38 +36,19 @@ function RouteSyncer() {
   return null;
 }
 
-
-// If Convex is configured, wrap the app with auth; otherwise render without it
-const appContent = convex ? (
-  <ConvexAuthProvider client={convex}>
-    <BrowserRouter>
-      <RouteSyncer />
-      <Routes>
-        <Route path="/" element={<Landing />} />
-        <Route path="/auth" element={<AuthPage redirectAfterAuth="/player" />} />
-        <Route path="/player" element={<Player />} />
-        <Route path="*" element={<NotFound />} />
-      </Routes>
-    </BrowserRouter>
-    <Toaster />
-  </ConvexAuthProvider>
-) : (
-  <BrowserRouter>
-    <RouteSyncer />
-    <Routes>
-      <Route path="/" element={<Landing />} />
-      <Route path="/auth" element={<AuthPage redirectAfterAuth="/player" />} />
-      <Route path="/player" element={<Player />} />
-      <Route path="*" element={<NotFound />} />
-    </Routes>
-  </BrowserRouter>
-);
-
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <VlyToolbar />
     <InstrumentationProvider>
-      {appContent}
+      <BrowserRouter>
+        <RouteSyncer />
+        <Routes>
+          <Route path="/" element={<Landing />} />
+          <Route path="/player" element={<Player />} />
+          <Route path="*" element={<NotFound />} />
+        </Routes>
+      </BrowserRouter>
+      <Toaster />
     </InstrumentationProvider>
   </StrictMode>,
 );
