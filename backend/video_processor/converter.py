@@ -116,7 +116,8 @@ class FrameConverter:
 
     def convert_ascii(self, frame: np.ndarray) -> List[Cell]:
         """Convert frame to ASCII art."""
-        gray = self._get_brightness(frame)
+        adjusted = self._adjust_pixels(frame)
+        gray = self._get_brightness(adjusted)
         height, width = gray.shape
         cells = []
         num_chars = len(ASCII_CHARS)
@@ -215,7 +216,8 @@ class FrameConverter:
                         pixel = adjusted[py, px]
                         bright = np.dot(pixel[:3], [0.299, 0.587, 0.114])
                         # Dot is "on" if brightness is below threshold
-                        threshold = 128 * (2.0 - self.density)
+                        # Higher density = higher threshold = more dots on
+                        threshold = 128 * self.density
                         if bright < threshold:
                             braille_bits |= (1 << dot_idx)
                         r_sum += int(pixel[0])

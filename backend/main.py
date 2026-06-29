@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import os
+import subprocess
 import time
 import uuid
 from pathlib import Path
@@ -43,6 +44,8 @@ ws_manager = WebSocketManager()
 active_decoder: Optional[VideoDecoder] = None
 current_video_id: Optional[str] = None
 current_video_meta: dict = {}
+current_audio_path: Optional[Path] = None
+current_has_audio: bool = False
 
 streaming_task: Optional[asyncio.Task] = None
 streaming_event = asyncio.Event()
@@ -51,6 +54,40 @@ streaming_event = asyncio.Event()
 # ── Helpers ──────────────────────────────────────────────────────────────
 def get_video_path(video_id: str) -> Path:
     return UPLOAD_DIR / f"{video_id}.mp4"
+
+
+def get_audio_path(video_id: str) -> Path:
+    return UPLOAD_DIR / f"{video_id}.wav"
+
+
+def extract_audio(video_path: Path, audio_path: Path) -> bool:
+    """Extract audio track from video as WAV using FFmpeg."""
+    ffmpeg = VideoDecoder.find_ffmpeg()
+    cmd = [
+        ffmpeg,
+        "-i", str(video_path),
+        "-vn",
+        "-acodec", "pcm_s16le",
+        "-ar", "44100",
+        "-ac", "2",
+        "-y",
+        str(audio_path),
+    ]
+    try:
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=120
+        )
+        if result.returncode == 0 and audio_path.exists() and audio_path.stat().st_size > 0:
+            logger.info(f"Audio extracted: {audio_path}")
+            return True
+        else:
+            logger.warning(f"No audio track found or extraction failed: {result.stderr[:200]}")
+            audio_path.unlink(missing_ok=True)
+            return False
+    except Exception as e:
+        logger.warning(f"Audio extraction error: {e}")
+        audio_path.unlink(missing_ok=True)
+        return False
 
 
 # ── REST Endpoints ──────────────────────────────────────────────────────
@@ -62,7 +99,7 @@ async def health():
 @app.post("/api/upload")
 async def upload_video(file: UploadFile = File(...)):
     """Upload a video file for processing."""
-    global active_decoder, current_video_id, current_video_meta
+    global active_decoder, current_video_id, current_video_meta, current_audio_path, current_has_audio
 
     ext = Path(file.filename or "video.mp4").suffix.lower()
     if ext not in VideoDecoder.SUPPORTED_FORMATS:
@@ -89,17 +126,48 @@ async def upload_video(file: UploadFile = File(...)):
         current_video_id = video_id
         current_video_meta = metadata
 
+        # Extract audio in background
+        audio_path = get_audio_path(video_id)
+
+        async def extract_audio_async():
+            global current_has_audio, current_audio_path
+            loop = asyncio.get_event_loop()
+            has_audio = await loop.run_in_executor(
+                None, extract_audio, video_path, audio_path
+            )
+            current_has_audio = has_audio
+            if has_audio:
+                current_audio_path = audio_path
+                logger.info(f"Audio ready for {video_id}")
+            else:
+                current_audio_path = None
+
+        asyncio.create_task(extract_audio_async())
+
         logger.info(f"Video uploaded: {file.filename} ({metadata['width']}x{metadata['height']}, {metadata['fps']}fps)")
 
         return {
             "video_id": video_id,
-            "metadata": metadata,
+            "metadata": {**metadata, "has_audio": True},  # optimistic – will be refined
             "message": "Video uploaded successfully",
         }
     except Exception as e:
         video_path.unlink(missing_ok=True)
         logger.error(f"Upload error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/audio/{video_id}")
+async def get_audio(video_id: str):
+    """Get extracted audio file for a video."""
+    audio_path = get_audio_path(video_id)
+    if not audio_path.exists():
+        raise HTTPException(status_code=404, detail="No audio track found for this video")
+    return FileResponse(
+        str(audio_path),
+        media_type="audio/wav",
+        filename=f"{video_id}.wav",
+    )
 
 
 @app.get("/api/video/{video_id}")
@@ -125,7 +193,9 @@ async def get_current_metadata():
     """Get metadata for the currently loaded video."""
     if not current_video_meta:
         raise HTTPException(status_code=404, detail="No video loaded")
-    return {"video_id": current_video_id, "metadata": current_video_meta}
+    meta = dict(current_video_meta)
+    meta["has_audio"] = current_has_audio
+    return {"video_id": current_video_id, "metadata": meta}
 
 
 @app.post("/api/play")
@@ -149,7 +219,6 @@ async def seek(frame: int = Query(0)):
     """Seek to a specific frame."""
     if not active_decoder:
         raise HTTPException(status_code=404, detail="No video loaded")
-    # Reset delta encoder on seek
     for state in ws_manager.states.values():
         state.current_frame = max(0, frame)
     return {"status": "seeking", "frame": frame}
@@ -189,6 +258,8 @@ async def websocket_stream(websocket: WebSocket):
     client_id = str(uuid.uuid4())
     await ws_manager.connect(client_id, websocket)
 
+    message_task: Optional[asyncio.Task] = None
+
     try:
         # Send initial connection info
         await ws_manager.send_json(
@@ -221,7 +292,7 @@ async def websocket_stream(websocket: WebSocket):
             # Calculate target dimensions
             target_width = state.requested_resolution
             aspect = active_decoder.height / active_decoder.width if active_decoder.width else 1
-            target_height = int(target_width * aspect * 0.5)  # Account for character aspect ratio
+            target_height = int(target_width * aspect * 0.5)
 
             # Build converter with current settings
             converter = FrameConverter(
@@ -233,7 +304,6 @@ async def websocket_stream(websocket: WebSocket):
                 density=state.density,
             )
 
-            # Encode with delta compression
             encoder = DeltaEncoder()
 
             frame_count = 0
@@ -263,7 +333,6 @@ async def websocket_stream(websocket: WebSocket):
                 encoded["grid_width"] = target_width
                 encoded["grid_height"] = len(cells) // max(1, target_width)
 
-                # Add performance stats
                 frame_stats = {
                     "frame_time_ms": round(elapsed * 1000 / max(1, frame_count), 1),
                     "convert_time_ms": round(convert_time * 1000, 1),
@@ -290,7 +359,8 @@ async def websocket_stream(websocket: WebSocket):
     except Exception as e:
         logger.error(f"WebSocket error for {client_id}: {e}")
     finally:
-        message_task.cancel()
+        if message_task:
+            message_task.cancel()
         ws_manager.disconnect(client_id)
 
 
@@ -298,7 +368,6 @@ async def websocket_stream(websocket: WebSocket):
 @app.on_event("startup")
 async def startup():
     logger.info("TextStream backend starting up")
-    # Verify FFmpeg
     try:
         VideoDecoder.find_ffmpeg()
         logger.info("FFmpeg found")

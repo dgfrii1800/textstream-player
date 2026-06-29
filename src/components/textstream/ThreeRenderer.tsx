@@ -1,14 +1,40 @@
-/* ── Three.js GPU-Accelerated Text Renderer ─────────────────────── */
+/* ── Three.js GPU-Accelerated Text Renderer (InstancedMesh) ────── */
+/* Each glyph is a single plane instance with per-instance char + color */
+/* Font atlas is baked into a single texture — no per-character materials */
 
 import { useEffect, useRef, useCallback, forwardRef, useImperativeHandle } from "react"
 import * as THREE from "three"
 import type { FrameData, TextCell } from "@/lib/text-stream-types"
 
+/* ── Constants ─────────────────────────────────────────────────── */
+const ATLAS_COLS = 16
+const ATLAS_ROWS = 8
+const CELL_SIZE = 64
+const ATLAS_W = ATLAS_COLS * CELL_SIZE   // 1024
+const ATLAS_H = ATLAS_ROWS * CELL_SIZE   // 512
+
+// All characters supported by the atlas (positions are row-major)
+const CHARSET =
+  " ░▒▓█▀▄▌▐" +
+  "@%#*+=-:." +
+  "ABCDEFGHIJKLMNOPQRSTUVWXYZ" +
+  "abcdefghijklmnopqrstuvwxyz" +
+  "0123456789" +
+  "!\"#$%&'()*,-./:;<=>?[\\]^_`{|}~"
+
+/** Lookup: character → atlas column, row */
+const CHAR_MAP = new Map<string, number>()
+for (let i = 0; i < CHARSET.length; i++) {
+  CHAR_MAP.set(CHARSET[i], i)
+}
+
+/* ── Public API ────────────────────────────────────────────────── */
 export interface ThreeRendererHandle {
   updateFrame: (frame: FrameData) => void
   resize: () => void
   setEffects: (effects: { crt: boolean; scanlines: boolean; glow: boolean; bloom: boolean; noise: boolean; filmGrain: boolean }) => void
   setTheme: (theme: string) => void
+  getFps: () => number
 }
 
 interface ThreeRendererProps {
@@ -17,184 +43,328 @@ interface ThreeRendererProps {
   gridHeight?: number
 }
 
-// Minimal ASCII-on-texture approach — we render each glyph as a sprite
-// from a generated font texture atlas.
-const CHARSET = " ░▒▓█▀▄▌▐█@%#*+=-:.ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
-
-function buildCharTexture(gl: THREE.WebGLRenderer, char: string, size: number): THREE.CanvasTexture {
+/* ── Build Atlas Texture ───────────────────────────────────────── */
+function buildAtlasTexture(): THREE.CanvasTexture {
   const canvas = document.createElement("canvas")
-  canvas.width = size
-  canvas.height = size
+  canvas.width = ATLAS_W
+  canvas.height = ATLAS_H
   const ctx = canvas.getContext("2d")!
-  ctx.clearRect(0, 0, size, size)
+  ctx.clearRect(0, 0, ATLAS_W, ATLAS_H)
+
+  const fontSize = Math.round(CELL_SIZE * 0.78)
   ctx.fillStyle = "#ffffff"
-  ctx.font = `bold ${size * 0.85}px "SF Mono", "Fira Code", "Cascadia Code", monospace`
+  ctx.font = `bold ${fontSize}px "SF Mono", "Fira Code", "Cascadia Code", "JetBrains Mono", monospace`
   ctx.textAlign = "center"
   ctx.textBaseline = "middle"
-  ctx.fillText(char, size / 2, size / 2 + 1)
-  return new THREE.CanvasTexture(canvas)
+
+  for (let i = 0; i < CHARSET.length; i++) {
+    const col = i % ATLAS_COLS
+    const row = Math.floor(i / ATLAS_COLS)
+    const cx = col * CELL_SIZE + CELL_SIZE / 2
+    const cy = row * CELL_SIZE + CELL_SIZE / 2
+    ctx.fillText(CHARSET[i], cx, cy + 1)
+  }
+
+  const tex = new THREE.CanvasTexture(canvas)
+  tex.minFilter = THREE.LinearMipmapLinearFilter
+  tex.magFilter = THREE.LinearFilter
+  tex.generateMipmaps = true
+  return tex
 }
 
+/* ── Shaders ───────────────────────────────────────────────────── */
+const VERTEX_SHADER = `
+  attribute float aCharIndex;
+  varying vec2 vUv;
+  varying vec3 vColor;
+  uniform float uAtlasCols;
+  uniform float uAtlasRows;
+
+  void main() {
+    float col = mod(aCharIndex, uAtlasCols);
+    float row = floor(aCharIndex / uAtlasCols);
+    vUv = vec2(
+      uv.x / uAtlasCols + col / uAtlasCols,
+      uv.y / uAtlasRows + (uAtlasRows - 1.0 - row) / uAtlasRows
+    );
+    vColor = instanceColor;
+    gl_Position = projectionMatrix * modelViewMatrix * instanceMatrix * vec4(position, 1.0);
+  }
+`
+
+const FRAGMENT_SHADER = `
+  uniform sampler2D uAtlas;
+  varying vec2 vUv;
+  varying vec3 vColor;
+
+  void main() {
+    float alpha = texture2D(uAtlas, vUv).r;
+    if (alpha < 0.02) discard;
+    gl_FragColor = vec4(vColor, 1.0);
+  }
+`
+
+/* ── Environment helper: 1 unit ≈ cell on screen ──────────────── */
+function computeLayout(
+  gw: number,
+  gh: number,
+  viewW: number,
+  viewH: number,
+) {
+  const cellAspect = 0.5 // character cells are ~2× taller than wide
+  const gridPxW = gw
+  const gridPxH = gh * cellAspect
+  const fitX = viewW * 0.9
+  const fitY = viewH * 0.9
+  const scale = Math.min(fitX / gridPxW, fitY / gridPxH)
+  const cellW = scale
+  const cellH = scale * cellAspect
+  const totalW = gw * cellW
+  const totalH = gh * cellH
+  const startX = -totalW / 2 + cellW / 2
+  const startY = totalH / 2 - cellH / 2
+  return { cellW, cellH, startX, startY, totalW, totalH }
+}
+
+/* ── Themed background colours ─────────────────────────────────── */
+const THEME_BG: Record<string, number> = {
+  minimal: 0x0a0a0a,
+  modern: 0x0a0a0a,
+  terminal: 0x000000,
+  matrix: 0x000000,
+  retro_dos: 0x0000a8,
+  cyberpunk: 0x0d0221,
+  hacker: 0x001a00,
+}
+
+/* ── Component ─────────────────────────────────────────────────── */
 export const ThreeRenderer = forwardRef<ThreeRendererHandle, ThreeRendererProps>(
   ({ className, gridWidth = 160, gridHeight = 90 }, ref) => {
     const containerRef = useRef<HTMLDivElement>(null)
     const sceneRef = useRef<THREE.Scene | null>(null)
     const cameraRef = useRef<THREE.OrthographicCamera | null>(null)
     const rendererRef = useRef<THREE.WebGLRenderer | null>(null)
-    const spritesRef = useRef<Map<string, THREE.Sprite>>(new Map())
-    const textureCacheRef = useRef<Map<string, THREE.CanvasTexture>>(new Map())
-    const charSizeRef = useRef(16)
+    const meshRef = useRef<THREE.InstancedMesh | null>(null)
+    const charIdxAttrRef = useRef<THREE.InstancedBufferAttribute | null>(null)
+    const geometryRef = useRef<THREE.PlaneGeometry | null>(null)
+    const materialRef = useRef<THREE.ShaderMaterial | null>(null)
     const frameIdRef = useRef(0)
-    const currentFrameRef = useRef<FrameData | null>(null)
-    const effectsRef = useRef({ crt: false, scanlines: false, glow: false, bloom: false, noise: false, filmGrain: false })
+    const layoutRef = useRef({ cellW: 1, cellH: 1, startX: 0, startY: 0 })
+    const capRef = useRef(0)            // max instances allocated
+    const dirtyRef = useRef(false)
+    const fpsHistoryRef = useRef<number[]>([])
+    const frameTimestampsRef = useRef<number[]>([])
+    const currentThemeRef = useRef("minimal")
 
-    const getCharTexture = useCallback((char: string): THREE.CanvasTexture => {
-      const existing = textureCacheRef.current.get(char)
-      if (existing) return existing
-      const tex = buildCharTexture(rendererRef.current!, char, charSizeRef.current)
-      textureCacheRef.current.set(char, tex)
-      return tex
-    }, [])
-
-    // Initialize scene
+    // ── Init scene (once) ────────────────────────────────────────
     useEffect(() => {
-      if (!containerRef.current) return
-
       const container = containerRef.current
+      if (!container) return
       const rect = container.getBoundingClientRect()
       const w = rect.width || 800
       const h = rect.height || 600
 
-      // Scene
       const scene = new THREE.Scene()
       scene.background = new THREE.Color(0x0a0a0a)
       sceneRef.current = scene
 
-      // Orthographic camera
       const aspect = w / h
-      const viewSize = 100
+      const vs = 100
       const camera = new THREE.OrthographicCamera(
-        -viewSize * aspect,
-        viewSize * aspect,
-        viewSize,
-        -viewSize,
-        0.1,
-        1000,
+        -vs * aspect, vs * aspect, vs, -vs, 0.1, 1000,
       )
       camera.position.z = 10
       cameraRef.current = camera
 
-      // Renderer
       const renderer = new THREE.WebGLRenderer({
         antialias: false,
         alpha: false,
         powerPreference: "high-performance",
       })
       renderer.setSize(w, h)
-      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
+      renderer.setPixelRatio(Math.min(devicePixelRatio, 2))
       container.appendChild(renderer.domElement)
       rendererRef.current = renderer
 
-      // Animation loop
+      // Create shared geometry (unit quad)
+      const geo = new THREE.PlaneGeometry(1, 1)
+      geometryRef.current = geo
+
+      // Create atlas texture
+      const atlasTex = buildAtlasTexture()
+
+      // Shader material
+      const mat = new THREE.ShaderMaterial({
+        uniforms: {
+          uAtlas: { value: atlasTex },
+          uAtlasCols: { value: ATLAS_COLS },
+          uAtlasRows: { value: ATLAS_ROWS },
+        },
+        vertexShader: VERTEX_SHADER,
+        fragmentShader: FRAGMENT_SHADER,
+        transparent: true,
+        depthTest: false,
+      })
+      materialRef.current = mat
+
+      // Dummy mesh with 1 instance (will be re-built on first frame)
+      const mesh = new THREE.InstancedMesh(geo, mat, 1)
+      mesh.count = 0
+      meshRef.current = mesh
+      scene.add(mesh)
+
       const animate = () => {
         frameIdRef.current = requestAnimationFrame(animate)
+
+        // FPS tracking
+        frameTimestampsRef.current.push(performance.now())
+        if (frameTimestampsRef.current.length > 120) {
+          frameTimestampsRef.current.shift()
+        }
+
+        if (dirtyRef.current && mesh.count > 0) {
+          // instanceColor is set via setColorAt – mark dirty
+          mesh.instanceMatrix.needsUpdate = true
+          mesh.instanceColor!.needsUpdate = true
+          if (charIdxAttrRef.current) {
+            charIdxAttrRef.current.needsUpdate = true
+          }
+          dirtyRef.current = false
+        }
+
         renderer.render(scene, camera)
       }
       animate()
 
       return () => {
         cancelAnimationFrame(frameIdRef.current)
+        mat.dispose()
+        atlasTex.dispose()
+        geo.dispose()
         renderer.dispose()
         renderer.domElement.remove()
       }
     }, [])
 
-    // Build sprites for a frame
-    const buildSprites = useCallback(
-      (cells: TextCell[], gridW: number, gridH: number) => {
-        const scene = sceneRef.current
-        const renderer = rendererRef.current
-        if (!scene || !renderer) return
+    // ── Rebuild mesh when grid size changes ──────────────────────
+    const ensureCapacity = useCallback((needed: number) => {
+      const scene = sceneRef.current
+      const geo = geometryRef.current
+      const mat = materialRef.current
+      const oldMesh = meshRef.current
+      if (!scene || !geo || !mat) return
 
-        // Clear and dispose old sprites
-        spritesRef.current.forEach((sprite) => {
-          scene.remove(sprite)
-          if (sprite.material) {
-            sprite.material.dispose()
-          }
-        })
-        spritesRef.current.clear()
+      if (oldMesh && oldMesh.count >= needed && capRef.current >= needed) {
+        // Already big enough – just clear
+        oldMesh.count = needed
+        return
+      }
 
-        if (!cells.length) return
+      // Remove old
+      if (oldMesh) scene.remove(oldMesh)
 
-        // Calculate aspect
-        const aspect = gridW / gridH
-        const viewSize = 100
-        const camAspect = renderer.domElement.width / renderer.domElement.height
-        const displayW = viewSize * camAspect
-        const displayH = viewSize
+      const cap = Math.max(needed, 320 * 180) // 57,600 max
+      capRef.current = cap
 
-        let fitW: number, fitH: number
-        if (aspect > camAspect) {
-          fitW = displayW * 0.9
-          fitH = fitW / aspect
-        } else {
-          fitH = displayH * 0.9
-          fitW = fitH * aspect
-        }
+      const mesh = new THREE.InstancedMesh(geo, mat, cap)
+      mesh.count = needed
+      mesh.frustumCulled = false
 
-        const cellW = fitW / gridW
-        const cellH = fitH / gridH
+      // Per-instance colour buffer
+      const colors = new Float32Array(cap * 3)
+      mesh.instanceColor = new THREE.InstancedBufferAttribute(colors, 3)
 
-        const startX = -fitW / 2 + cellW / 2
-        const startY = fitH / 2 - cellH / 2
+      // Per-instance character index
+      const charIdx = new Float32Array(cap)
+      const attr = new THREE.InstancedBufferAttribute(charIdx, 1)
+      mesh.geometry.setAttribute("aCharIndex", attr)
+      charIdxAttrRef.current = attr
 
-        // Cap sprites for performance
-        const maxSprites = 40000
-        const limitedCells = cells.slice(0, maxSprites)
+      const dummy = new THREE.Object3D()
+      for (let i = 0; i < cap; i++) {
+        dummy.position.set(0, 0, 0)
+        dummy.scale.set(1, 1, 1)
+        dummy.updateMatrix()
+        mesh.setMatrixAt(i, dummy.matrix)
+        mesh.setColorAt(i, new THREE.Color(0x000000))
+        charIdx[i] = 0
+      }
+      attr.needsUpdate = true
+      mesh.instanceMatrix.needsUpdate = true
+      mesh.instanceColor.needsUpdate = true
 
-        for (const cell of limitedCells) {
-          const tex = getCharTexture(cell.char || " ")
-          const mat = new THREE.SpriteMaterial({
-            map: tex,
-            transparent: true,
-            depthTest: false,
-            sizeAttenuation: false,
-          })
+      meshRef.current = mesh
+      scene.add(mesh)
+    }, [])
 
-          // Parse color
-          const color = new THREE.Color(cell.color || "#ffffff")
-          mat.color = color
-
-          const sprite = new THREE.Sprite(mat)
-          const x = startX + cell.x * cellW
-          const y = startY - cell.y * cellH
-          sprite.position.set(x, y, 0)
-
-          // Scale sprite to cell size (with slight positive bias)
-          const scaleX = cellW * 1.05
-          const scaleY = cellH * 1.05
-          sprite.scale.set(scaleX, scaleY, 1)
-
-          scene.add(sprite)
-          spritesRef.current.set(`${cell.x},${cell.y}`, sprite)
-        }
-      },
-      [getCharTexture],
-    )
-
-    // Expose updateFrame to parent
+    // ── Update frame ─────────────────────────────────────────────
     const updateFrame = useCallback(
       (frame: FrameData) => {
-        currentFrameRef.current = frame
+        const mesh = meshRef.current
+        const attr = charIdxAttrRef.current
+        if (!mesh || !attr) return
+
         const cells = frame.cells || []
         const gw = frame.grid_width || gridWidth
         const gh = frame.grid_height || gridHeight
-        buildSprites(cells, gw, gh)
+        const total = gw * gh
+        if (total === 0) return
+
+        ensureCapacity(total)
+        mesh.count = total
+
+        const renderer = rendererRef.current
+        if (!renderer) return
+
+        const w = renderer.domElement.width
+        const h = renderer.domElement.height
+        const viewW = (cameraRef.current!.right - cameraRef.current!.left)
+        const viewH = (cameraRef.current!.top - cameraRef.current!.bottom)
+        const layout = computeLayout(gw, gh, viewW, viewH)
+        layoutRef.current = layout
+        const { cellW, cellH, startX, startY } = layout
+
+        const charArr = attr.array as Float32Array
+        const colorArr = mesh.instanceColor!.array as Float32Array
+        const dummy = new THREE.Object3D()
+        const tmpColor = new THREE.Color()
+
+        // Build lookup from cells
+        const cellMap = new Map<string, TextCell>()
+        for (const c of cells) {
+          cellMap.set(`${c.x},${c.y}`, c)
+        }
+
+        let idx = 0
+        for (let y = 0; y < gh; y++) {
+          for (let x = 0; x < gw; x++) {
+            const cell = cellMap.get(`${x},${y}`)
+            const char = cell?.char || " "
+            const hex = cell?.color || "#ffffff"
+
+            const ci = CHAR_MAP.get(char) ?? 1 // fallback to '░'
+            charArr[idx] = ci
+
+            tmpColor.set(hex)
+            colorArr[idx * 3] = tmpColor.r
+            colorArr[idx * 3 + 1] = tmpColor.g
+            colorArr[idx * 3 + 2] = tmpColor.b
+
+            dummy.position.set(startX + x * cellW, startY - y * cellH, 0)
+            dummy.scale.set(cellW * 1.04, cellH * 1.04, 1)
+            dummy.updateMatrix()
+            mesh.setMatrixAt(idx, dummy.matrix)
+
+            idx++
+          }
+        }
+
+        dirtyRef.current = true
       },
-      [buildSprites, gridWidth, gridHeight],
+      [gridWidth, gridHeight, ensureCapacity],
     )
 
+    // ── Resize ───────────────────────────────────────────────────
     const resize = useCallback(() => {
       const container = containerRef.current
       const renderer = rendererRef.current
@@ -202,78 +372,42 @@ export const ThreeRenderer = forwardRef<ThreeRendererHandle, ThreeRendererProps>
       if (!container || !renderer || !camera) return
 
       const rect = container.getBoundingClientRect()
-      const w = rect.width || 800
-      const h = rect.height || 600
+      renderer.setSize(rect.width, rect.height)
 
-      renderer.setSize(w, h)
-      const aspect = w / h
-      const viewSize = 100
-
-      camera.left = -viewSize * aspect
-      camera.right = viewSize * aspect
-      camera.top = viewSize
-      camera.bottom = -viewSize
+      const aspect = rect.width / rect.height
+      const vs = 100
+      camera.left = -vs * aspect
+      camera.right = vs * aspect
+      camera.top = vs
+      camera.bottom = -vs
       camera.updateProjectionMatrix()
-
-      // Re-render current frame if exists
-      if (currentFrameRef.current) {
-        buildSprites(
-          currentFrameRef.current.cells || [],
-          currentFrameRef.current.grid_width || gridWidth,
-          currentFrameRef.current.grid_height || gridHeight,
-        )
-      }
-    }, [buildSprites, gridWidth, gridHeight])
-
-    const setEffects = useCallback(
-      (effects: { crt: boolean; scanlines: boolean; glow: boolean; bloom: boolean; noise: boolean; filmGrain: boolean }) => {
-        effectsRef.current = effects
-        const scene = sceneRef.current
-        if (!scene) return
-
-        // Simple effect: adjust background color slightly
-        if (effects.crt || effects.scanlines) {
-          // effects handled via CSS overlay
-        }
-      },
-      [],
-    )
-
-    const setTheme = useCallback((theme: string) => {
-      const scene = sceneRef.current
-      if (!scene) return
-      switch (theme) {
-        case "minimal":
-          scene.background = new THREE.Color(0x0a0a0a)
-          break
-        case "terminal":
-          scene.background = new THREE.Color(0x000000)
-          break
-        case "matrix":
-          scene.background = new THREE.Color(0x000000)
-          break
-        case "retro_dos":
-          scene.background = new THREE.Color(0x0000a8)
-          break
-        case "cyberpunk":
-          scene.background = new THREE.Color(0x0d0221)
-          break
-        case "hacker":
-          scene.background = new THREE.Color(0x001a00)
-          break
-        default:
-          scene.background = new THREE.Color(0x0a0a0a)
-      }
     }, [])
 
-    useImperativeHandle(ref, () => ({ updateFrame, resize, setEffects, setTheme }), [
-      updateFrame,
-      resize,
-      setEffects,
-      setTheme,
-    ])
+    // ── Effects (CSS overlays handled by parent) ─────────────────
+    const setEffects = useCallback(() => {}, [])
 
-    // Handle resize
+    // ── Theme ────────────────────────────────────────────────────
+    const setTheme = useCallback((theme: string) => {
+      currentThemeRef.current = theme
+      const scene = sceneRef.current
+      if (!scene) return
+      scene.background = new THREE.Color(THEME_BG[theme] ?? 0x0a0a0a)
+    }, [])
+
+    // ── FPS tracking ─────────────────────────────────────────────
+    const getFps = useCallback(() => {
+      const stamps = frameTimestampsRef.current
+      if (stamps.length < 10) return 0
+      const recent = stamps.slice(-60)
+      const elapsed = recent[recent.length - 1] - recent[0]
+      return elapsed > 0 ? ((recent.length - 1) / elapsed * 1000) : 0
+    }, [])
+
+    useImperativeHandle(ref, () => ({
+      updateFrame, resize, setEffects, setTheme, getFps,
+    }), [updateFrame, resize, setEffects, setTheme, getFps])
+
+    // Resize observer
     useEffect(() => {
       const onResize = () => resize()
       window.addEventListener("resize", onResize)
@@ -284,12 +418,7 @@ export const ThreeRenderer = forwardRef<ThreeRendererHandle, ThreeRendererProps>
       <div
         ref={containerRef}
         className={className}
-        style={{
-          width: "100%",
-          height: "100%",
-          position: "relative",
-          overflow: "hidden",
-        }}
+        style={{ width: "100%", height: "100%", position: "relative", overflow: "hidden" }}
       />
     )
   },
