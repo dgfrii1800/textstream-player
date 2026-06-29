@@ -167,17 +167,17 @@ def test_cell_to_dict():
 
 def test_contrast_affects_char_distribution():
     """Test that contrast changes character distribution."""
-    frame = np.full((10, 10, 3), 128, dtype=np.uint8)
+    # Use varied pixel values so contrast has something to amplify/reduce
+    rng = np.random.RandomState(42)
+    frame = rng.randint(0, 256, (20, 20, 3), dtype=np.uint8)
     converter_low = FrameConverter(mode=RenderingMode.ASCII, contrast=0.1)
-    converter_high = FrameConverter(mode=RenderingMode.ASCII, contrast=2.0)
+    converter_high = FrameConverter(mode=RenderingMode.ASCII, contrast=3.0)
     cells_low = converter_low.convert_frame(frame)
     cells_high = converter_high.convert_frame(frame)
     # Different contrast should produce different characters
     chars_low = {c.char for c in cells_low}
     chars_high = {c.char for c in cells_high}
-    # At extreme contrast values, char distribution differs
-    assert len(cells_low) == 100
-    assert len(cells_high) == 100
+    assert chars_low != chars_high, "Contrast should change character distribution"
 
 
 if __name__ == "__main__":
