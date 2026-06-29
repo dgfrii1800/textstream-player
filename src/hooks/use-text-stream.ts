@@ -13,6 +13,7 @@ import { DEFAULT_SETTINGS } from "@/lib/text-stream-types"
 
 interface UseTextStreamReturn {
   connected: boolean
+  connectionTimedOut: boolean
   videoLoaded: boolean
   metadata: VideoMetadata | null
   latestFrame: FrameData | null
@@ -28,8 +29,9 @@ interface UseTextStreamReturn {
   disconnect: () => void
 }
 
-const WS_URL = import.meta.env.VITE_WS_URL || "ws://localhost:8766/ws/stream"
-const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8766"
+// In production, connect to the same host the page is served from
+const WS_URL = import.meta.env.VITE_WS_URL || `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws/stream`
+const API_URL = import.meta.env.VITE_API_URL || `${location.protocol}//${location.host}`
 
 export function useTextStream(): UseTextStreamReturn {
   const wsRef = useRef<WebSocket | null>(null)
@@ -40,6 +42,7 @@ export function useTextStream(): UseTextStreamReturn {
   const [stats, setStats] = useState<FrameStats | null>(null)
   const [settings, setSettings] = useState<PlayerSettings>(DEFAULT_SETTINGS)
   const [error, setError] = useState<string | null>(null)
+  const [connectionTimedOut, setConnectionTimedOut] = useState(false)
 
   const connect = useCallback(() => {
     if (wsRef.current?.readyState === WebSocket.OPEN) return
@@ -156,9 +159,16 @@ export function useTextStream(): UseTextStreamReturn {
     [send, settings.mode],
   )
 
-  // Connect on mount with auto-reconnect
+  // Connect on mount with auto-reconnect and timeout
   useEffect(() => {
     connect()
+
+    // Show a friendly timeout message after 10 seconds if still not connected
+    const timeout = setTimeout(() => {
+      if (!connected) {
+        setConnectionTimedOut(true)
+      }
+    }, 10000)
 
     const interval = setInterval(() => {
       if (!wsRef.current || wsRef.current.readyState === WebSocket.CLOSED) {
@@ -169,11 +179,13 @@ export function useTextStream(): UseTextStreamReturn {
     return () => {
       disconnect()
       clearInterval(interval)
+      clearTimeout(timeout)
     }
   }, [connect, disconnect])
 
   return {
     connected,
+    connectionTimedOut,
     videoLoaded,
     metadata,
     latestFrame,

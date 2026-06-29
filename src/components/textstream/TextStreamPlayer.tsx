@@ -118,6 +118,7 @@ export function TextStreamPlayer() {
 
   const {
     connected,
+    connectionTimedOut,
     videoLoaded,
     metadata,
     latestFrame,
@@ -253,16 +254,42 @@ export function TextStreamPlayer() {
     : "—"
 
   if (!connected) {
+    if (connectionTimedOut) {
+      return (
+        <div className="flex flex-col items-center justify-center h-full gap-4 px-8">
+          <div className="h-10 w-10 rounded-full bg-destructive/10 flex items-center justify-center">
+            <AlertCircle className="h-5 w-5 text-destructive/70" />
+          </div>
+          <div className="text-center">
+            <p className="text-sm font-medium text-muted-foreground mb-1">
+              Stream server not reachable
+            </p>
+            <p className="text-xs text-muted-foreground/60 leading-relaxed max-w-sm">
+              The TextStream backend is not running. Start it with:
+            </p>
+            <code className="inline-block mt-2 bg-muted px-2.5 py-1.5 rounded text-[11px] font-mono">
+              cd backend &amp;&amp; venv/bin/python main.py
+            </code>
+            <p className="text-xs text-muted-foreground/60 mt-3">
+              Then refresh this page.
+            </p>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            className="mt-2 text-xs"
+            onClick={() => window.location.reload()}
+          >
+            Retry connection
+          </Button>
+        </div>
+      )
+    }
+
     return (
       <div className="flex flex-col items-center justify-center h-full gap-3">
         <div className="h-8 w-8 rounded-full border-2 border-muted-foreground/30 border-t-muted-foreground animate-spin" />
         <p className="text-sm text-muted-foreground">Connecting to stream server...</p>
-        <p className="text-xs text-muted-foreground/60">
-          Start the backend with:{" "}
-          <code className="bg-muted px-1.5 py-0.5 rounded text-[11px]">
-            cd backend &amp;&amp; venv/bin/python main.py
-          </code>
-        </p>
       </div>
     )
   }
