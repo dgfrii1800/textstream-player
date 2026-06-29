@@ -54,6 +54,7 @@ EXPOSE 8766
 CMD exec gunicorn main:app \
     --worker-class uvicorn.workers.UvicornWorker \
     --workers 1 \
+    --preload \
     --bind 0.0.0.0:${PORT:-8766} \
     --timeout 120 \
     --keep-alive 5 \
