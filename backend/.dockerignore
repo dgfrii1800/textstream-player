@@ -1,0 +1,29 @@
+# ── TextStream Backend .dockerignore ─────────────────────────────
+
+# Version control
+.git
+.gitignore
+
+# Python
+venv/
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+tests/
+
+# Uploads (ephemeral, runtime only)
+uploads/*
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
