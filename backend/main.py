@@ -13,7 +13,8 @@ from typing import Optional
 import aiofiles
 from fastapi import FastAPI, File, HTTPException, Query, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, HTMLResponse
+from fastapi.staticfiles import StaticFiles
 
 from video_processor import DeltaEncoder, FrameConverter, VideoDecoder
 from video_processor.converter import ColorMode, RenderingMode
@@ -39,6 +40,10 @@ UPLOAD_DIR = Path("uploads")
 UPLOAD_DIR.mkdir(exist_ok=True)
 
 FFMPEG_PATH = os.environ.get("FFMPEG_PATH", "ffmpeg")
+
+# Production static frontend — built by Dockerfile, served by FastAPI
+STATIC_DIR = Path("static")
+_HAS_STATIC = STATIC_DIR.is_dir() and (STATIC_DIR / "index.html").exists()
 
 ws_manager = WebSocketManager()
 active_decoder: Optional[VideoDecoder] = None
@@ -88,6 +93,30 @@ def extract_audio(video_path: Path, audio_path: Path) -> bool:
         logger.warning(f"Audio extraction error: {e}")
         audio_path.unlink(missing_ok=True)
         return False
+
+
+# ── Serve frontend static files (production) ───────────────────────────
+if _HAS_STATIC:
+    logger.info(f"Serving frontend static files from {STATIC_DIR}")
+    app.mount("/assets", StaticFiles(directory=str(STATIC_DIR / "assets")), name="assets")
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def serve_spa(full_path: str):
+        """SPA fallback — serve files directly or index.html for client-side routing."""
+        if full_path.startswith("api/") or full_path.startswith("ws/"):
+            raise HTTPException(status_code=404)
+        # Prevent path traversal
+        file_path = (STATIC_DIR / full_path).resolve()
+        if not str(file_path).startswith(str(STATIC_DIR.resolve())):
+            raise HTTPException(status_code=404)
+        # Serve static files (favicon, logo, manifest, etc.) directly
+        if file_path.is_file():
+            return FileResponse(str(file_path))
+        # SPA fallback — let React Router handle the route
+        index = STATIC_DIR / "index.html"
+        if index.exists():
+            return HTMLResponse(index.read_bytes(), media_type="text/html")
+        raise HTTPException(status_code=404)
 
 
 # ── REST Endpoints ──────────────────────────────────────────────────────

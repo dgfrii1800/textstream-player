@@ -1,0 +1,37 @@
+# ── TextStream Root .dockerignore ────────────────────────────────
+# Keep Docker build context lean — Railway builds from this repo root.
+
+# Dependencies (reinstalled inside the container)
+node_modules/
+backend/venv/
+
+# Version control
+.git/
+.gitignore
+
+# Python bytecode
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+
+# Environment
+.env
+.env.local
+.env.example
+
+# Runtime data (recreated by backend)
+uploads/
+dist/
+
+# IDE & OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Old separate Railway configs (deployment now unified via root Dockerfile)
+backend/railway.json
+backend/nixpacks.toml
+backend/Dockerfile
+backend/.dockerignore

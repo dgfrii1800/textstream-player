@@ -1,5 +1,4 @@
 import { useNavigate } from "react-router"
-import { useAuth } from "@/hooks/use-auth"
 import { Button } from "@/components/ui/button"
 import {
   ArrowRight,
@@ -41,7 +40,6 @@ const FEATURES = [
 
 export default function Landing() {
   const navigate = useNavigate()
-  const { isAuthenticated, isLoading } = useAuth()
 
   return (
     <div className="min-h-screen flex flex-col bg-[#0a0a0a] text-[#e0e0e0] selection:bg-[#e0e0e0]/10">
@@ -56,28 +54,14 @@ export default function Landing() {
             <span className="text-[11px] text-[#666] hover:text-[#ccc] transition-colors cursor-default">
               GitHub
             </span>
-            {isLoading ? (
-              <div className="h-7 w-16 rounded bg-white/[0.04] animate-pulse" />
-            ) : isAuthenticated ? (
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-7 text-[11px] border-white/[0.08] text-[#ccc] hover:bg-white/[0.04]"
-                onClick={() => navigate("/player")}
-              >
-                Launch Player
-                <ArrowRight className="ml-1.5 h-3 w-3" />
-              </Button>
-            ) : (
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-7 text-[11px] border-white/[0.08] text-[#ccc] hover:bg-white/[0.04]"
-                onClick={() => navigate("/auth")}
-              >
-                Sign In
-              </Button>
-            )}
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 text-[11px] border-white/[0.08] text-[#ccc] hover:bg-white/[0.04]"
+              onClick={() => navigate("/auth")}
+            >
+              Sign In
+            </Button>
           </nav>
         </div>
       </header>
@@ -102,23 +86,13 @@ export default function Landing() {
               rendered on the GPU. No <code className="text-[#999] text-[12px]">{'<video>'}</code> tag required.
             </p>
             <div className="flex items-center justify-center gap-3">
-              {isAuthenticated ? (
-                <Button
-                  className="h-9 px-5 text-xs bg-white text-[#0a0a0a] hover:bg-white/90 rounded-full"
-                  onClick={() => navigate("/player")}
-                >
-                  Launch the Player
-                  <ArrowRight className="ml-2 h-3.5 w-3.5" />
-                </Button>
-              ) : (
-                <Button
-                  className="h-9 px-5 text-xs bg-white text-[#0a0a0a] hover:bg-white/90 rounded-full"
-                  onClick={() => navigate("/auth")}
-                >
-                  Get Started
-                  <ArrowRight className="ml-2 h-3.5 w-3.5" />
-                </Button>
-              )}
+              <Button
+                className="h-9 px-5 text-xs bg-white text-[#0a0a0a] hover:bg-white/90 rounded-full"
+                onClick={() => navigate("/auth")}
+              >
+                Get Started
+                <ArrowRight className="ml-2 h-3.5 w-3.5" />
+              </Button>
               <Button
                 variant="outline"
                 size="sm"

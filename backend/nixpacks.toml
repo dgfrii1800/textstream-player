@@ -1,5 +1,0 @@
-# ── Nixpacks Configuration for TextStream Backend on Railway ─────
-# Installs FFmpeg via Nix packages. Start command is in railway.json.
-
-[phases.install]
-nixPkgs = ["...", "ffmpeg"]

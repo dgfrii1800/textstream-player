@@ -16,7 +16,9 @@ import AuthPage from "./pages/Auth.tsx";
 import Player from "./pages/Player.tsx";
 import NotFound from "./pages/NotFound.tsx";
 
-const convex = new ConvexReactClient(import.meta.env.VITE_CONVEX_URL as string);
+// Convex is optional — the Landing page works without it
+const convexUrl = import.meta.env.VITE_CONVEX_URL;
+const convex = convexUrl ? new ConvexReactClient(convexUrl) : null;
 
 
 
@@ -44,22 +46,37 @@ function RouteSyncer() {
 }
 
 
+// If Convex is configured, wrap the app with auth; otherwise render without it
+const appContent = convex ? (
+  <ConvexAuthProvider client={convex}>
+    <BrowserRouter>
+      <RouteSyncer />
+      <Routes>
+        <Route path="/" element={<Landing />} />
+        <Route path="/auth" element={<AuthPage redirectAfterAuth="/player" />} />
+        <Route path="/player" element={<Player />} />
+        <Route path="*" element={<NotFound />} />
+      </Routes>
+    </BrowserRouter>
+    <Toaster />
+  </ConvexAuthProvider>
+) : (
+  <BrowserRouter>
+    <RouteSyncer />
+    <Routes>
+      <Route path="/" element={<Landing />} />
+      <Route path="/auth" element={<AuthPage redirectAfterAuth="/player" />} />
+      <Route path="/player" element={<Player />} />
+      <Route path="*" element={<NotFound />} />
+    </Routes>
+  </BrowserRouter>
+);
+
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <VlyToolbar />
     <InstrumentationProvider>
-      <ConvexAuthProvider client={convex}>
-        <BrowserRouter>
-          <RouteSyncer />
-          <Routes>
-            <Route path="/" element={<Landing />} />
-            <Route path="/auth" element={<AuthPage redirectAfterAuth="/player" />} />
-            <Route path="/player" element={<Player />} />
-            <Route path="*" element={<NotFound />} />
-          </Routes>
-        </BrowserRouter>
-        <Toaster />
-      </ConvexAuthProvider>
+      {appContent}
     </InstrumentationProvider>
   </StrictMode>,
 );
