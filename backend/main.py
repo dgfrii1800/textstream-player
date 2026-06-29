@@ -378,4 +378,5 @@ async def startup():
 # ── Entrypoint ───────────────────────────────────────────────────────────
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8765, reload=True)
+    port = int(os.environ.get("TEXTSTREAM_PORT", "8766"))
+    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=True)

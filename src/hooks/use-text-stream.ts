@@ -28,8 +28,8 @@ interface UseTextStreamReturn {
   disconnect: () => void
 }
 
-const WS_URL = import.meta.env.VITE_WS_URL || "ws://localhost:8765/ws/stream"
-const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8765"
+const WS_URL = import.meta.env.VITE_WS_URL || "ws://localhost:8766/ws/stream"
+const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8766"
 
 export function useTextStream(): UseTextStreamReturn {
   const wsRef = useRef<WebSocket | null>(null)
