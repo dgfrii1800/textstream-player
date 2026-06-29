@@ -38,7 +38,7 @@ app.add_middleware(
 UPLOAD_DIR = Path("uploads")
 UPLOAD_DIR.mkdir(exist_ok=True)
 
-FFMPEG_PATH = os.environ.get("FFMPEG_PATH", "/tmp/ffmpeg")
+FFMPEG_PATH = os.environ.get("FFMPEG_PATH", "ffmpeg")
 
 ws_manager = WebSocketManager()
 active_decoder: Optional[VideoDecoder] = None
@@ -378,5 +378,7 @@ async def startup():
 # ── Entrypoint ───────────────────────────────────────────────────────────
 if __name__ == "__main__":
     import uvicorn
-    port = int(os.environ.get("TEXTSTREAM_PORT", "8766"))
-    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=True)
+    # Railway injects $PORT; fall back to 8766 for local dev
+    port = int(os.environ.get("PORT", os.environ.get("TEXTSTREAM_PORT", "8766")))
+    reload_flag = os.environ.get("RAILWAY") is None  # no reload in prod
+    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=reload_flag)
