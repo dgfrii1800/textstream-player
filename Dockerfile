@@ -13,6 +13,7 @@ RUN bun install --frozen-lockfile
 COPY tsconfig.json tsconfig.app.json tsconfig.node.json ./
 COPY vite.config.ts ./
 COPY index.html ./
+COPY vly-toolbar-readonly.tsx ./
 COPY public/ public/
 COPY src/ src/
 RUN bun run build
