@@ -214,76 +214,76 @@ async def websocket_stream(websocket: WebSocket):
                 await asyncio.sleep(0.1)
                 continue
 
-                # Stream frames
-                frame_interval = 1.0 / max(1, state.target_fps)
-                start_time = time.time()
+            # Stream frames
+            frame_interval = 1.0 / max(1, state.target_fps)
+            start_time = time.time()
 
-                # Calculate target dimensions
-                target_width = state.requested_resolution
-                aspect = active_decoder.height / active_decoder.width if active_decoder.width else 1
-                target_height = int(target_width * aspect * 0.5)  # Account for character aspect ratio
+            # Calculate target dimensions
+            target_width = state.requested_resolution
+            aspect = active_decoder.height / active_decoder.width if active_decoder.width else 1
+            target_height = int(target_width * aspect * 0.5)  # Account for character aspect ratio
 
-                # Build converter with current settings
-                converter = FrameConverter(
-                    mode=RenderingMode(state.requested_mode),
-                    color_mode=ColorMode.FULL_RGB,
-                    brightness=state.brightness,
-                    contrast=state.contrast,
-                    gamma=state.gamma,
-                    density=state.density,
-                )
+            # Build converter with current settings
+            converter = FrameConverter(
+                mode=RenderingMode(state.requested_mode),
+                color_mode=ColorMode.FULL_RGB,
+                brightness=state.brightness,
+                contrast=state.contrast,
+                gamma=state.gamma,
+                density=state.density,
+            )
 
-                # Encode with delta compression
-                encoder = DeltaEncoder()
+            # Encode with delta compression
+            encoder = DeltaEncoder()
 
-                frame_count = 0
-                async_for_frame = active_decoder.extract_frames(
-                    target_width=target_width,
-                    target_height=target_height,
-                    target_fps=state.target_fps,
-                )
+            frame_count = 0
+            async_for_frame = active_decoder.extract_frames(
+                target_width=target_width,
+                target_height=target_height,
+                target_fps=state.target_fps,
+            )
 
-                async for frame_array in async_for_frame:
-                    if not state.is_playing:
-                        break
+            async for frame_array in async_for_frame:
+                if not state.is_playing:
+                    break
 
-                    convert_start = time.time()
-                    cells = converter.convert_frame(frame_array)
-                    convert_time = time.time() - convert_start
+                convert_start = time.time()
+                cells = converter.convert_frame(frame_array)
+                convert_time = time.time() - convert_start
 
-                    encode_start = time.time()
-                    encoded = encoder.encode(cells, force_keyframe=(frame_count == 0))
-                    encode_time = time.time() - encode_start
+                encode_start = time.time()
+                encoded = encoder.encode(cells, force_keyframe=(frame_count == 0))
+                encode_time = time.time() - encode_start
 
-                    frame_count += 1
-                    now = time.time()
-                    elapsed = now - start_time
+                frame_count += 1
+                now = time.time()
+                elapsed = now - start_time
 
-                    # Attach grid info
-                    encoded["grid_width"] = target_width
-                    encoded["grid_height"] = len(cells) // max(1, target_width)
+                # Attach grid info
+                encoded["grid_width"] = target_width
+                encoded["grid_height"] = len(cells) // max(1, target_width)
 
-                    # Add performance stats
-                    frame_stats = {
-                        "frame_time_ms": round(elapsed * 1000 / max(1, frame_count), 1),
-                        "convert_time_ms": round(convert_time * 1000, 1),
-                        "encode_time_ms": round(encode_time * 1000, 1),
-                        "cells_count": len(cells),
-                        "changed_count": len(encoded["cells"]),
-                        "compression_ratio": encoder.get_compression_ratio(),
-                        "frame_rate": round(frame_count / max(0.001, elapsed), 1),
-                    }
+                # Add performance stats
+                frame_stats = {
+                    "frame_time_ms": round(elapsed * 1000 / max(1, frame_count), 1),
+                    "convert_time_ms": round(convert_time * 1000, 1),
+                    "encode_time_ms": round(encode_time * 1000, 1),
+                    "cells_count": len(cells),
+                    "changed_count": len(encoded["cells"]),
+                    "compression_ratio": encoder.get_compression_ratio(),
+                    "frame_rate": round(frame_count / max(0.001, elapsed), 1),
+                }
 
-                    encoded["stats"] = frame_stats
-                    encoded["type"] = "frame"
+                encoded["stats"] = frame_stats
+                encoded["type"] = "frame"
 
-                    await ws_manager.send_json(client_id, encoded)
+                await ws_manager.send_json(client_id, encoded)
 
-                    # Maintain target FPS
-                    target_time = frame_count * frame_interval
-                    sleep_time = target_time - (time.time() - start_time)
-                    if sleep_time > 0:
-                        await asyncio.sleep(sleep_time)
+                # Maintain target FPS
+                target_time = frame_count * frame_interval
+                sleep_time = target_time - (time.time() - start_time)
+                if sleep_time > 0:
+                    await asyncio.sleep(sleep_time)
 
     except WebSocketDisconnect:
         logger.info(f"Client {client_id} disconnected")
