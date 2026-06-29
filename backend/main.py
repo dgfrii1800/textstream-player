@@ -95,30 +95,6 @@ def extract_audio(video_path: Path, audio_path: Path) -> bool:
         return False
 
 
-# ── Serve frontend static files (production) ───────────────────────────
-if _HAS_STATIC:
-    logger.info(f"Serving frontend static files from {STATIC_DIR}")
-    app.mount("/assets", StaticFiles(directory=str(STATIC_DIR / "assets")), name="assets")
-
-    @app.get("/{full_path:path}", include_in_schema=False)
-    async def serve_spa(full_path: str):
-        """SPA fallback — serve files directly or index.html for client-side routing."""
-        if full_path.startswith("api/") or full_path.startswith("ws/"):
-            raise HTTPException(status_code=404)
-        # Prevent path traversal
-        file_path = (STATIC_DIR / full_path).resolve()
-        if not str(file_path).startswith(str(STATIC_DIR.resolve())):
-            raise HTTPException(status_code=404)
-        # Serve static files (favicon, logo, manifest, etc.) directly
-        if file_path.is_file():
-            return FileResponse(str(file_path))
-        # SPA fallback — let React Router handle the route
-        index = STATIC_DIR / "index.html"
-        if index.exists():
-            return HTMLResponse(index.read_bytes(), media_type="text/html")
-        raise HTTPException(status_code=404)
-
-
 # ── REST Endpoints ──────────────────────────────────────────────────────
 @app.get("/api/health")
 async def health():
@@ -391,6 +367,30 @@ async def websocket_stream(websocket: WebSocket):
         if message_task:
             message_task.cancel()
         ws_manager.disconnect(client_id)
+
+
+# ── SPA static file serving (registered AFTER API routes so they take priority) ──
+if _HAS_STATIC:
+    logger.info(f"Serving frontend static files from {STATIC_DIR}")
+    app.mount("/assets", StaticFiles(directory=str(STATIC_DIR / "assets")), name="assets")
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def serve_spa(full_path: str):
+        """SPA fallback — serve files directly or index.html for client-side routing."""
+        if full_path.startswith("api/") or full_path.startswith("ws/"):
+            raise HTTPException(status_code=404)
+        # Prevent path traversal
+        file_path = (STATIC_DIR / full_path).resolve()
+        if not str(file_path).startswith(str(STATIC_DIR.resolve())):
+            raise HTTPException(status_code=404)
+        # Serve static files (favicon, logo, manifest, etc.) directly
+        if file_path.is_file():
+            return FileResponse(str(file_path))
+        # SPA fallback — let React Router handle the route
+        index = STATIC_DIR / "index.html"
+        if index.exists():
+            return HTMLResponse(index.read_bytes(), media_type="text/html")
+        raise HTTPException(status_code=404)
 
 
 # ── Startup ──────────────────────────────────────────────────────────────
